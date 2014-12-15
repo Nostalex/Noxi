@@ -1,0 +1,34 @@
+			  -= Lab3d =-
+
+			-= In Russian =-
+
+  Это моя версия еще пока недописанной 3-х мерной игры в стиле
+Wolfenstain3d.
+  Управление: "стрелки" - движение/поворот, пробел - открывание
+дверей, RShift+стрелка - бег, Alt+влево/вправо - шаг влево/вправо,
+Esc - выход из программы.
+  Автор: Алексей Фрунзе.
+
+	LAB3DC.PAS		1-й вариант трехмерного лабиринта
+	LAB3D8.PAS		8-й вариант
+	LAB3D9.PAS		9-й вариант
+	LAB3D10.PAS		10-й вариант (пока последний)
+
+
+			-= In English =-
+
+  It's my 3d engine resembling Wolfenstain3d game. I still
+work on it.
+  Controls: arrows - move/rotate, space - open door,
+RShift+arrow - run, Alt+Left/Right - move Left/Right, Esc -
+exit program.
+  Author: Alexei A. Frounze.
+
+	LAB3DC.PAS		1-st version
+	LAB3D8.PAS		8-th version
+	LAB3D9.PAS		9-th version
+	LAB3D10.PAS		10-th version (the last one)
+
+
+  Homepage: http://www.chat.ru/~alexfru
+  E-mail: alexfru@chat.ru

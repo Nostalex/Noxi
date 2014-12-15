@@ -1,0 +1,637 @@
+Uses CRT, DOS, Grafix, KeyPres2, FixPoint, Render;
+
+Const
+  a_0   =    0;                                 { используемые    }
+  a_1   =    5;                                 {                 }
+  a_2   =   11;                                 {                 }
+  a_3   =   16;                                 {                 }
+  a_5   =   26;                                 {                 }
+  a_6   =   32;                                 {                 }
+  a_30  =  160;                                 {                 }
+  a_45  =  240;                                 {                 }
+  a_60  =  320;                                 {      единицы    }
+  a_90  =  480;                                 {                 }
+  a_180 =  960;                                 {                 }
+  a_270 = 1440;                                 {                 }
+  a_360 = 1920;                                 {          углов  }
+
+  d_angle = a_3;                                { приращение угла }
+
+  Step =   8;                                   { величина шага вперед/назад }
+  Close = 24;                                   {    минимальное расстояние }
+                                                { до стены, лучше на менять }
+
+  MapL = 40;                                    { размеры игровой }
+  MapH = 20;                                    {           карты }
+
+  Map : Array [0..MapH-1,0..MapL-1] of Char =   { игровая карта }
+  ('2222222222222222222222222222222222222222',
+   '2                 2 d d d           2  2',
+   '2                 d 22222           2  2',
+   '22222222222222222D222   d              2',
+   '2         11111     2   2222222222222222',
+   '23333333331 1 d     2   2          23332',
+   '23       31 111     2   d          23 32',
+   '23 33333 31   d     d   2222222222223 32',
+   '23 3     31 111     2   2333333333333 32',
+   '23 3     31 1 d     2   d             32',
+   '23 333333321111     2   2333333333333332',
+   '23D322222222222222D222222222222222222222',
+   '2               2   2          444444442',
+   '2               d   d          d      42',
+   '2               2   2          44     42',
+   '2222D2222222222222D22222222222224     42',
+   '2        d          1111111111114     42',
+   '2 p      d          d          14     42',
+   '2        d          11111111111144444442',
+   '2222222222222222222222222222222222222222');
+
+   Chars : Array [0..9] of Char = '0123456789';
+
+Type
+  Table = Array [a_0..a_360] of LongInt;
+  PTable = ^Table;
+  TDoor = Record
+    Pos : LongInt;
+    X, Y : Word;
+    Status : Byte;                      { 0 - неподвижна, 1 - откр., 2 - закр. }
+    Time : Byte;                        { время до закрытия }
+  End;
+
+Var
+  PSin, PCos, PTan, PCTan,
+  PSc, PCsc, PXStep, PYStep : PTable;   { таблицы sin, cos & tan, ... }
+  Xp, Yp : Word;                        { координаты героя }
+  Ang : Integer;                        { угол обзора героя }
+  DX, DY : LongInt;                     { приращения для шага }
+  Texture : Array [0..9,0..1] of Pointer;
+  S : Word;
+  Pal : TPal;
+  Doors : Array [0..255] of TDoor;
+  DoorCnt : Word;
+  Timer : Byte;
+  OldTimer : Pointer;
+  Screen1,
+  Screen2 : Pointer;
+
+Procedure FindDoors;
+Var
+  X, Y : Word;
+Begin
+  DoorCnt := 0;
+  For Y := 0 to MapH-1 do
+    For X := 0 to MapL-1 do
+      If UpCase(Map[MapH-1-Y,X]) = 'D' then Begin
+        Doors[DoorCnt].X := X; Doors[DoorCnt].Y := Y;
+        Doors[DoorCnt].Pos := 0;
+        Doors[DoorCnt].Status := 0;
+        Inc (DoorCnt)
+      End
+End;
+
+Function GetDoor (X, Y : Word) : Byte;
+Var
+  I : Byte;
+Begin
+  For I := 0 to DoorCnt-1 do
+    If (Doors[I].X = X) and (Doors[I].Y = Y) then Break;
+  GetDoor := I
+End;
+
+Procedure FindPlayer;
+Var
+  X, Y : Word;
+Begin
+  For Y := 0 to MapH-1 do
+    For X := 0 to MapL-1 do
+      If UpCase(Map[MapH-1-Y,X]) = 'P' then Begin
+        Xp := (X shl 6) + 32;
+        Yp := (Y shl 6) + 32;
+        Map[MapH-1-Y,X] := ' ';
+        Break
+      End
+End;
+
+Procedure Load_Textures;
+Var I : Byte;
+Begin
+  For I := 1 to 5 do Begin
+    LoadPCX256 ('WT'+Chars[I]+'1.PCX', Texture[I,0], S, Pal);
+    LoadPCX256 ('WT'+Chars[I]+'2.PCX', Texture[I,1], S, Pal)
+  End
+End;
+
+Procedure Kill_Textures;
+Var I : Byte;
+Begin
+  For I := 1 to 5 do Begin
+    FreeMem (Texture[I,0], S);
+    FreeMem (Texture[I,1], S)
+  End
+End;
+
+Procedure Make_Tables;                  { подготавливает таблицы sin, ... }
+Var
+  Ang : Word;
+Begin
+  New (PSin);
+  New (PCos);
+  New (PTan);
+  New (PCTan);
+  New (PSc);
+  New (PCsc);
+  New (PXStep);
+  New (PYStep);
+  WriteLn ('Computing tables. Please wait...');
+  For Ang := a_0 to a_360 do Begin
+    GotoXY (1 + (Ang shr 6), WhereY); Write (#254);
+
+    PSin^[Ang] := Trunc (4096 * Sin(Ang*PI/a_180));
+    PCos^[Ang] := Trunc (4096 * Cos(Ang*PI/a_180));
+    If PCos^[Ang] <> 0 then Begin
+      PTan^[Ang] := Trunc (4096 * Sin(Ang*PI/a_180)/Cos(Ang*PI/a_180));
+      PSc^[Ang] := Trunc (4096 / Cos(Ang*PI/a_180));
+    End;
+    If PSin^[Ang] <> 0 then Begin
+      PCTan^[Ang] := Trunc (4096 * Cos(Ang*PI/a_180)/Sin(Ang*PI/a_180));
+      PCsc^[Ang] := Trunc (4096 / Sin(Ang*PI/a_180))
+    End;
+
+    If (a_0 <= Ang) and (Ang < a_180) then Begin
+      Fix1 := Abs (PTan^[Ang]); Fix2 := 6; LSal;
+      PYStep^[Ang] := FixRes
+    End
+    Else Begin
+      Fix1 := - Abs (PTan^[Ang]); Fix2 := 6; LSal;
+      PYStep^[Ang] := FixRes
+    End;
+    If (a_90 <= Ang) and (Ang < a_270) then Begin
+      Fix1 := - Abs (PCTan^[Ang]); Fix2 := 6; LSal;
+      PXStep^[Ang] := FixRes
+    End
+    Else Begin
+      Fix1 := Abs (PCTan^[Ang]); Fix2 := 6; LSal;
+      PXStep^[Ang] := FixRes
+    End
+  End;
+  WriteLn
+End;
+
+Procedure Kill_Tables;                  { освобождает память от таблиц }
+Begin
+  Dispose (PSin);
+  Dispose (PCos);
+  Dispose (PTan);
+  Dispose (PCTan);
+  Dispose (PSc);
+  Dispose (PCsc);
+  Dispose (PYStep);
+  Dispose (PXStep)
+End;
+
+Procedure RayCast (X, Y : LongInt; View_Ang : Integer);
+(* отсекает лучи и рисует трехмерную проекцию *)
+{ X, Y - позиция героя }
+{ View_Ang - угол направления просмотра героя }
+Var
+  Ray : Word;
+  X_Ray, Y_Ray : Boolean;
+  Casting, X_Hit, Y_Hit : Byte;
+  N_Y_Cell, N_X_Cell, X_Bound, Y_Bound,
+  X_Delta, Y_Delta, Xi, Yi,
+  Cur_Cell_X, Cur_Cell_Y, Dist_X, Dist_Y,
+  Tan, CTan, Sc, Csc,
+  Xd, Yd,
+  Height : LongInt;
+  DoorNum : Byte;
+
+Label
+  LX_Door_Skip, LY_Door_Skip, L_Skip1, L_Skip2;
+
+Begin
+  Dec (View_Ang, a_30);
+  If View_Ang < a_0 then Inc (View_Ang, a_360);
+
+  For Ray := 319 downto 0 do Begin
+    Fix1 := X; Long2Fix; Xi := FixRes;
+    Fix1 := Y; Long2Fix; Yi := FixRes;
+
+    Tan := PTan^[View_Ang];
+    CTan := PCTan^[View_Ang];
+    Sc := PSc^[View_Ang];
+    Csc := PCsc^[View_Ang];
+
+    If (a_0 <= View_Ang) and (View_Ang < a_180) then Begin
+      Y_Bound := 64 + (Y and $FFFFFFC0);
+      Y_Delta := 64;
+      N_Y_Cell := 0
+    End
+    Else Begin
+      Y_Bound := Y and $FFFFFFC0;
+      Y_Delta := -64;
+      N_Y_Cell := -1
+    End;
+    Fix1 := CTan; Fix2 := Y_Bound-Y; LMul; Inc (Xi, FixRes);
+
+    If (View_Ang < a_90) or (a_270 <= View_Ang) then Begin
+      X_Bound := 64 + (X and $FFFFFFC0);
+      X_Delta := 64;
+      N_X_Cell := 0
+    End
+    Else Begin
+      X_Bound := X and $FFFFFFC0;
+      X_Delta := -64;
+      N_X_Cell := -1
+    End;
+    Fix1 := Tan; Fix2 := X_Bound-X; LMul; Inc (Yi, FixRes);
+
+    Casting := 2;
+    X_Ray := False;
+    Y_Ray := False;
+
+    If (View_Ang = a_90) or (View_Ang = a_270) then Begin
+      Dist_X := $10000000;
+      X_Ray := True;
+      Dec (Casting)
+    End;
+
+    If (View_Ang = a_0) or (View_Ang = a_180) then Begin
+      Dist_Y := $10000000;
+      Y_Ray := True;
+      Dec (Casting)
+    End;
+
+    While Casting > 0 do Begin
+      If not X_Ray then Begin
+        Cur_Cell_X := (X_bound + N_X_Cell) Shr 6;
+        Fix1 := Yi; Fix2 := 18; LSar; Cur_Cell_Y := FixRes;
+
+        If (Cur_Cell_Y < 0) or (Cur_Cell_Y > MapH-1) or    { FOR PROTECT }
+           (Cur_Cell_X < 0) or (Cur_Cell_X > MapL-1) then  {  MODE  :-(  }
+             Begin
+               Dist_X := $10000000;
+               X_Ray := True;
+               Dec (Casting);
+               Goto L_Skip1
+             End;
+        X_Hit := Byte(Map[MapH-1-Cur_Cell_Y,Cur_Cell_X]);
+
+{ Doors support begin }
+        If X_Hit = 100 then Begin                       { 'd' }
+          Fix1 := PYStep^[View_Ang]; Fix2 := 1; LSar;
+          Yd := Yi + FixRes;
+          Fix1 := Yd; Fix2Long;
+          Render_Texture_X := FixRes and 63;
+          Fix1 := FixRes; Fix2 := 6; LSar;
+          If FixRes <> Cur_Cell_Y then
+            Goto LX_Door_Skip;                  { Not a door => skip }
+          DoorNum := GetDoor (Cur_Cell_X, Cur_Cell_Y);
+          Inc (Render_Texture_X, Doors[DoorNum].Pos);
+          If Render_Texture_X > 63 then
+            Goto LX_Door_Skip;                  { Door is opened }
+          Yi := Yd + (Doors[DoorNum].Pos shl 12);
+          Fix1 := X_Bound-X;
+          If X_Delta = 64 then Inc (Fix1, 32)
+          Else Dec (Fix1, 32);
+          Fix2 := Sc; LMul; Dist_X := FixRes;
+          X_Ray := True;
+          Dec (Casting);
+          X_Delta := -64;
+          X_Hit := 53
+        End                                             { '5' }
+{ Doors support end }
+
+        Else
+        If (X_Hit <> 32) and (X_Hit <> 68) then Begin   { ' ', 'D' }
+          Fix1 := X_Bound-X; Fix2 := Sc; LMul; Dist_X := FixRes;
+          X_Ray := True;
+          Dec (Casting)
+        End
+        Else
+LX_Door_skip:
+          Inc (Yi, PYStep^[View_Ang])
+      End;
+
+L_Skip1:
+
+      If not Y_Ray then Begin
+        Cur_Cell_Y := (Y_bound + N_Y_Cell) Shr 6;
+        Fix1 := Xi; Fix2 := 18; LSar; Cur_Cell_X := FixRes;
+
+        If (Cur_Cell_Y < 0) or (Cur_Cell_Y > MapH-1) or    { FOR PROTECT }
+           (Cur_Cell_X < 0) or (Cur_Cell_X > MapL-1) then  {  MODE  :-(  }
+             Begin
+               Dist_Y := $10000000;
+               Y_Ray := True;
+               Dec (Casting);
+               Goto L_Skip2
+             End;
+        Y_Hit := Byte(Map[MapH-1-Cur_Cell_Y,Cur_Cell_X]);
+
+{ Doors support begin }
+        If Y_Hit = 68 then Begin                        { 'D' }
+          Fix1 := PXStep^[View_Ang]; Fix2 := 1; LSar;
+          Xd := Xi + FixRes;
+          Fix1 := Xd; Fix2Long;
+          Render_Texture_X := FixRes and 63;
+          Fix1 := FixRes; Fix2 := 6; LSar;
+          If FixRes <> Cur_Cell_X then
+            Goto LY_Door_Skip;                  { Not a door => skip }
+          DoorNum := GetDoor (Cur_Cell_X, Cur_Cell_Y);
+          Inc (Render_Texture_X, Doors[DoorNum].Pos);
+          If Render_Texture_X > 63 then
+            Goto LY_Door_Skip;                  { Door is opened }
+          Xi := Xd + (Doors[DoorNum].Pos shl 12);
+          Fix1 := Y_Bound-Y;
+          If Y_Delta = 64 then Inc (Fix1, 32)
+          Else Dec (Fix1, 32);
+          Fix2 := Csc; LMul; Dist_Y := FixRes;
+          Y_Ray := True;
+          Dec (Casting);
+          Y_Delta := 64;
+          Y_Hit := 53                                   { '5' }
+        End
+{ Doors support end }
+
+        Else
+        If (Y_Hit <> 32) and (Y_Hit <> 100) then Begin  { ' ', 'd' }
+          Fix1 := Y_Bound-Y; Fix2 := Csc; LMul; Dist_Y := FixRes;
+          Y_Ray := True;
+          Dec (Casting)
+        End
+        Else
+LY_Door_Skip:
+          Inc (Xi, PXStep^[View_Ang])
+      End;
+
+L_Skip2:
+
+      Inc (X_Bound, X_Delta);
+      Inc (Y_Bound, Y_Delta)
+    End;
+
+    If Dist_X < Dist_Y then Begin
+      Fix1 := Yi; Fix2Long;
+      If X_Delta > 0 then FixRes := 63 - FixRes;
+      Render_Texture_X := FixRes and 63;
+      Fix1 := $4000000; Fix2 := Dist_X; FixDiv;
+      Render_Texture := Texture[X_Hit-48,0]
+    End Else Begin
+      Fix1 := Xi; Fix2Long;
+      If Y_Delta < 0 then FixRes := 63 - FixRes;
+      Render_Texture_X := FixRes and 63;
+      Fix1 := $4000000; Fix2 := Dist_Y; FixDiv;
+      Render_Texture := Texture[Y_Hit-48,1]
+    End;
+    Fix1 := FixRes; Fix2 := PSc^[Abs(View_Ang-Ang)]; FixMul;
+    Fix1 := FixRes; Fix2Long; Height := FixRes;
+
+{    LineV (Ray, 0, 200, Black);}
+    Render_Sliver_H := Height;
+    Render_Screen_X := Ray;
+    Render_Sliver;
+
+    Inc (View_Ang);
+    If View_Ang >= a_360 then Dec (View_Ang, a_360)
+  End;
+End;
+
+Procedure Rotate (Left : Boolean);
+Begin
+  If Left then Begin
+    Inc (Ang, d_angle);
+    If Ang >= a_360 then Dec (Ang, a_360)
+  End
+  Else Begin
+    Dec (Ang, d_angle);
+    If Ang < a_0 then Inc (Ang, a_360)
+  End;
+  Fix1 := Step; Fix2 := PCos^[Ang]; LMul;
+  Fix1 := FixRes; Fix2Long; DX := FixRes;
+  Fix1 := Step; Fix2 := PSin^[Ang]; LMul;
+  Fix1 := FixRes; Fix2Long; DY := FixRes
+End;
+
+Procedure Go (Forward : Boolean);
+Var
+  XO, YO,
+  DX2, DY2,
+  Cell_X, Cell_Y,
+  X_Sub, Y_Sub : LongInt;
+  Hit : Char;
+  DoorNum : Byte;
+Begin
+  XO := Xp; YO := Yp;
+  DX2 := DX; DY2 := DY;
+  If not Forward then Begin
+    DX2 := -DX2; DY2 := -DY2;
+  End;
+  Inc (Xp, DX2); Inc (Yp, DY2);
+  Fix1 := Xp; Fix2 := 6; LSar;
+  Cell_X := FixRes;
+  Fix1 := Yp; Fix2 := 6; LSar;
+  Cell_Y := FixRes;
+  X_Sub := Xp and 63;
+  Y_Sub := Yp and 63;
+
+  If DX2 > 0 then Begin
+    Hit := Map[MapH-1-Cell_Y,Cell_X+1];
+    DoorNum := GetDoor (Cell_X+1, Cell_Y);
+    If Upcase(Hit) = 'D' then Begin
+      If (Doors[DoorNum].Pos < 64) and (X_Sub > 64 - Close) then
+        Dec (Xp, X_Sub - (64 - Close))
+    End
+    Else
+    If (Hit <> #32) and (X_Sub > 64 - Close) then
+      Dec (Xp, X_Sub - (64 - Close))
+  End
+  Else Begin
+    Hit := Map[MapH-1-Cell_Y,Cell_X-1];
+    DoorNum := GetDoor (Cell_X-1, Cell_Y);
+    If Upcase(Hit) = 'D' then Begin
+      If (Doors[DoorNum].Pos < 64) and (X_Sub < Close) then
+        Inc (Xp, Close - X_Sub)
+    End
+    Else
+    If (Hit <> #32) and (X_Sub < Close) then
+      Inc (Xp, Close - X_Sub)
+  End;
+
+  If DY2 > 0 then Begin
+    Hit := Map[MapH-1-(Cell_Y+1),Cell_X];
+    DoorNum := GetDoor (Cell_X, Cell_Y+1);
+    If Upcase(Hit) = 'D' then Begin
+      If (Doors[DoorNum].Pos < 64) and (Y_Sub > 64 - Close) then
+        Dec (Yp, Y_Sub - (64 - Close))
+    End
+    Else
+    If (Hit <> #32) and (Y_Sub > 64 - Close) then
+      Dec (Yp, Y_Sub - (64 - Close))
+  End
+  Else Begin
+    Hit := Map[MapH-1-(Cell_Y-1),Cell_X];
+    DoorNum := GetDoor (Cell_X, Cell_Y-1);
+    If Upcase(Hit) = 'D' then Begin
+      If (Doors[DoorNum].Pos < 64) and (Y_Sub < Close) then
+        Inc (Yp, Close - Y_Sub)
+    End
+    Else
+    If (Hit <> #32) and (Y_Sub < Close) then
+      Inc (Yp, Close - Y_Sub)
+  End;
+
+  Fix1 := Xp; Fix2 := 6; LSar;
+  Cell_X := FixRes;
+  Fix1 := Yp; Fix2 := 6; LSar;
+  Cell_Y := FixRes;
+  Case Map[MapH-1-Cell_Y,Cell_X] of
+    #32, 'd', 'D' :;
+    Else Begin
+      Xp := XO;
+      Yp := YO
+    End
+  End
+End;
+
+Procedure DoorToggle;
+Var
+  D_Cell_X,
+  D_Cell_Y : Word;
+  DoorNum : Word;
+Begin
+  D_Cell_X := Xp shr 6;
+  D_Cell_Y := Yp shr 6;
+  If (a_360-a_45 <= Ang) or (Ang < a_45) then Inc (D_Cell_X)
+  Else  If (a_45 <= Ang) and (Ang < a_90+a_45) then Inc (D_Cell_Y)
+  Else If (a_90+a_45 <= Ang) and (Ang < a_180+a_45) then Dec (D_Cell_X)
+  Else If (a_180+a_45 <= Ang) and (Ang < a_270+a_45) then Dec (D_Cell_Y);
+  If UpCase(Map[MapH-1-D_Cell_Y,D_Cell_X]) <> 'D' then Exit;
+  DoorNum := GetDoor (D_Cell_X, D_Cell_Y);
+  If Doors[DoorNum].Status <> 0 then Exit;
+  Doors[DoorNum].Status := 1
+End;
+
+Procedure NewTimer; Interrupt;
+Var
+  I : Word;
+Begin
+    Asm
+      PushF
+      Call  DWord Ptr OldTimer
+    End;
+
+  If DoorCnt > 0 then
+  For I := 0 to DoorCnt-1 do Begin
+    If Doors[I].Status = 1 then Begin
+      If Doors[I].Pos < 64 then Inc (Doors[I].Pos, 4)
+      Else Begin
+        Doors[I].Status := 2;
+        Doors[I].Time := 96
+      End
+    End
+    Else If Doors[I].Status = 2 then Begin
+      If Doors[I].Time > 0 then Dec (Doors[I].Time)
+      Else If Doors[I].Pos > 0 then Dec (Doors[I].Pos, 4)
+      Else Doors[I].Status := 0
+    End
+  End
+End;
+
+{$L OUTNEW.OBJ}
+Procedure OutNew; Near; External;
+Procedure ScreenUpdate;
+Var
+  SkyStart : Word;
+Begin
+  SetActivePage (Seg(Screen2^));
+  Render_VSeg := Seg(Screen2^);
+    Asm
+      LES   DI, Screen2
+      DB    66h
+      Mov   AX, 0E0E0h
+      DW    0E0E0h
+      Mov   CX, 8000
+      CLD
+      DB    66h
+      Rep   STOSW                       { Sky }
+      DB    66h
+      Mov   AX, 0E1E1h
+      DW    0E1E1h
+      Mov   CX, 8000
+      DB    66h
+      Rep   STOSW                       { Ground }
+    End;
+    RayCast (Xp, Yp, Ang);
+  OutNew
+End;
+
+Const
+  Frames : LongInt = 0;                 { frame counter }
+  Ticks : LongInt = 5*18;               { 5 sec }
+  STicks : LongInt = 0;                 { ticks at start }
+  FrameRate : Real = 0;
+
+Begin
+  If Test8086 < 2 then Begin
+    WriteLn ('Want a 80386 or better processor!');
+    Exit
+  End;
+  GetMem (Screen1, 64000);
+  GetMem (Screen2, 64000);
+  FillChar (Screen1^, 64000, 0);
+  FillChar (Screen2^, 64000, 0);
+  Load_Textures;
+  FindDoors;
+  FindPlayer;
+  Make_Tables;
+  WaitForACSReleased;
+  Set_Handler;
+  InitGraph;
+  SetPal (Pal);
+  SetCRGB ($E0, 0, 48, 63);
+  SetCRGB ($E1, 0, 32, 0);
+
+  Ang := a_0;
+
+  Rotate (True); Rotate (False);
+  ScreenUpdate;
+
+  GetIntVec (8, OldTimer);
+  SetIntVec (8, @NewTimer);
+
+  STicks := MemL[Seg0040:$6C];
+
+  Repeat
+    If KeyMap[sUp] then                         { движение вперед }
+      Go (True);
+    If KeyMap[sDown] then                       { движение назад }
+      Go (False);
+    If KeyMap[sLeft] then                       { поворот налево }
+      Rotate (True);
+    If KeyMap[sRight] then                      { поворот направо }
+      Rotate (False);
+    If KeyMap[sSpace] then
+      DoorToggle;
+    ScreenUpdate;
+    If MemL[Seg0040:$6C] < STicks+Ticks then
+      Inc (Frames);
+  Until KeyMap[sEsc];
+
+  SetIntVec (8, OldTimer);
+
+  Remove_Handler;
+  CloseGraph;
+  Kill_Tables;
+  Kill_Textures;
+  FreeMem (Screen2, 64000);
+  FreeMem (Screen1, 64000);
+  If MemL[Seg0040:$6C] >= STicks+Ticks then Begin
+    FrameRate := Frames*18/Ticks;
+    WriteLn (FrameRate:6:1,' frames per second.')
+  End;
+  WriteLn ('┌─────────────────────────────────────────┐');
+  WriteLn ('│   Lab3D by Alexei A. Frounze (c) 1998   │');
+  WriteLn ('│  Homepage : http://www.chat.ru/~alexfru │');
+  WriteLn ('│        E-Mail : alexfru@chat.ru         │');
+  WriteLn ('└─────────────────────────────────────────┘')
+End.
